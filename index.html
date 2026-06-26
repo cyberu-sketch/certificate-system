@@ -159,7 +159,7 @@
         const AssessmentFlow = ({ questions, topics, certConfig, onComplete }) => {
             const [step, setStep] = useState('survey');
             const [scores, setScores] = useState({});
-            const [comment, setComment] = useState(''); // เพิ่ม State ความคิดเห็นเพิ่มเติม
+            const [comment, setComment] = useState(''); // State ความคิดเห็นเพิ่มเติม
             const [certData, setCertData] = useState({ name: '', email: '', topic: topics[0] || '' });
             const [isGenerating, setIsGenerating] = useState(false);
             const certRef = useRef(null);
@@ -181,19 +181,7 @@
                     const scoreArray = questions.map((_, idx) => scores[idx] || 0);
                     const formattedDate = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' });
 
-                    const newData = {
-                        id: 'CERT-' + Date.now(),
-                        name: certData.name,
-                        email: certData.email,
-                        topic: certData.topic,
-                        date: formattedDate,
-                        scores: scoreArray,
-                        comment: comment // เก็บข้อมูลความคิดเห็นเพิ่มเติมลงในแบบบันทึก
-                    };
-                    onComplete(newData);
-
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                    
+                    let pdfBase64 = '';
                     if (certRef.current) {
                         const canvas = await html2canvas(certRef.current, { scale: 2, useCORS: true });
                         const imgData = canvas.toDataURL('image/jpeg', 1.0);
@@ -201,30 +189,51 @@
                         const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
                         pdf.addImage(imgData, 'JPEG', 0, 0, 297, 210);
                         pdf.save(`Certificate_${certData.name.replace(/\s+/g, '_')}.pdf`);
+                        pdfBase64 = pdf.output('datauristring');
+                    }
 
-                        const pdfBase64 = pdf.output('datauristring');
-                        
-                        // =========================================================
-                        // URL ของ Google Apps Script ที่สามารถส่งเข้า Drive + Email ได้
-                        // =========================================================
-                        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxNaURRWN_CAS9gYk7fraocZN-leEFv0S00X9Un3YrtSuh7ZIAg9H5LlXjW2h7taF7SHA/exec"; 
-                        
-                        if (GOOGLE_SCRIPT_URL) {
-                            await fetch(GOOGLE_SCRIPT_URL, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                                body: JSON.stringify({ 
-                                    email: certData.email, 
-                                    name: certData.name, 
-                                    topic: certData.topic,
-                                    date: formattedDate,
-                                    scores: scoreArray,
-                                    comment: comment, // แนบส่งความคิดเห็นเพิ่มเติมไปด้วย
-                                    pdfBase64: pdfBase64 
-                                })
-                            });
+                    let driveUrl = '';
+                    // =========================================================
+                    // URL ของ Google Apps Script ที่สามารถส่งเข้า Drive + Email ได้
+                    // =========================================================
+                    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0ArvNlGf1HmDNdYEonNQ8QOEZ9xOBOUDlrxAx3h2EE805Ze4HYR8a6aGBPBb6y1keKQ/exec"; 
+                    
+                    if (GOOGLE_SCRIPT_URL) {
+                        const response = await fetch(GOOGLE_SCRIPT_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                            body: JSON.stringify({ 
+                                email: certData.email, 
+                                name: certData.name, 
+                                topic: certData.topic,
+                                date: formattedDate,
+                                scores: scoreArray,
+                                comment: comment, // แนบส่งความคิดเห็นเพิ่มเติมไปด้วย
+                                pdfBase64: pdfBase64 
+                            })
+                        });
+
+                        try {
+                            const result = await response.json();
+                            if (result && result.fileUrl) {
+                                driveUrl = result.fileUrl; // รับลิงก์ที่ถูกสร้างใหม่จาก Google Drive
+                            }
+                        } catch (jsonErr) {
+                            console.error("Error parsing script response:", jsonErr);
                         }
                     }
+
+                    const newData = {
+                        id: 'CERT-' + Date.now(),
+                        name: certData.name,
+                        email: certData.email,
+                        topic: certData.topic,
+                        date: formattedDate,
+                        scores: scoreArray,
+                        comment: comment, // เก็บข้อมูลความคิดเห็นเพิ่มเติมลงในแบบบันทึก
+                        driveUrl: driveUrl // จัดเก็บลิงก์ Google Drive ลงประวัติในเครื่อง
+                    };
+                    onComplete(newData);
                     setStep('success');
                 } catch (error) {
                     console.error("Error generating PDF:", error);
@@ -391,11 +400,28 @@
                                 <h3 className="text-lg font-semibold border-b pb-2 mb-4">ผลการค้นหา ({results.length})</h3>
                                 <div className="grid gap-4 md:grid-cols-2">
                                     {results.length > 0 ? results.map((item, idx) => (
-                                        <div key={idx} className="bg-gray-50 p-5 rounded-xl border border-gray-200">
-                                            <h4 className="font-bold text-brand-dark text-lg">{item.name}</h4>
-                                            <p className="text-sm text-gray-500 mb-2">{item.email}</p>
-                                            <p className="text-sm mt-2"><span className="font-semibold">หลักสูตร:</span> {item.topic}</p>
-                                            <p className="text-sm text-gray-500"><i className="far fa-calendar-alt"></i> {item.date}</p>
+                                        <div key={idx} className="bg-gray-50 p-5 rounded-xl border border-gray-200 flex flex-col justify-between min-h-[180px]">
+                                            <div>
+                                                <h4 className="font-bold text-brand-dark text-lg">{item.name}</h4>
+                                                <p className="text-sm text-gray-500 mb-2">{item.email}</p>
+                                                <p className="text-sm mt-2"><span className="font-semibold">หลักสูตร:</span> {item.topic}</p>
+                                                <p className="text-sm text-gray-500"><i className="far fa-calendar-alt"></i> {item.date}</p>
+                                            </div>
+                                            
+                                            {/* เพิ่มส่วนการแสดงลิงก์ดาวน์โหลดจาก Google Drive หากข้อมูลมี driveUrl อยู่ */}
+                                            {item.driveUrl && (
+                                                <div className="mt-4 pt-3 border-t border-gray-200">
+                                                    <a 
+                                                        href={item.driveUrl} 
+                                                        target="_blank" 
+                                                        rel="noopener noreferrer" 
+                                                        className="inline-flex items-center gap-2 text-brand hover:text-brand-dark font-semibold text-sm bg-blue-50 px-4 py-2.5 rounded-lg hover:bg-blue-100 transition-all w-full justify-center border border-blue-200 shadow-sm"
+                                                    >
+                                                        <i className="fab fa-google-drive text-lg text-green-600"></i>
+                                                        คลิกเพื่อดูใบประกาศฯ บน Google Drive
+                                                    </a>
+                                                </div>
+                                            )}
                                         </div>
                                     )) : <p className="text-gray-500">ไม่พบข้อมูลใบประกาศนียบัตร</p>}
                                 </div>
@@ -482,14 +508,14 @@
                     }
                     if (doughnutRef.current && doughnutData) {
                         if (doughnutInstance.current) doughnutInstance.current.destroy();
-                        doughnutInstance.current = new Chart(doughnutRef.current, { type: 'doughnut', data: doughnutData, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, cutout: '65%' } });
+                        doughnutInstance.current = new Chart(doughnutRef.current, { type: 'doughnut', data: doughnutData, options: { responsive: true, maintainAspectRatio: false, plugins: { textCenter: {}, legend: { position: 'bottom' } }, cutout: '65%' } });
                     }
                 }
             }, [activeMenu, chartData, doughnutData]);
 
             const handleExport = () => {
-                const wsData = [['ID', 'ชื่อ', 'อีเมล', 'หัวข้อ', 'วันที่', ...questions.map((_, i) => `ข้อ ${i+1}`), 'ความคิดเห็น']];
-                data.forEach(item => wsData.push([item.id, item.name, item.email, item.topic, item.date, ...item.scores, item.comment || '-']));
+                const wsData = [['ID', 'ชื่อ', 'อีเมล', 'หัวข้อ', 'วันที่', ...questions.map((_, i) => `ข้อ ${i+1}`), 'ความคิดเห็น', 'ลิงก์ Google Drive']];
+                data.forEach(item => wsData.push([item.id, item.name, item.email, item.topic, item.date, ...item.scores, item.comment || '-', item.driveUrl || '-']));
                 const ws = XLSX.utils.aoa_to_sheet(wsData);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Results");
